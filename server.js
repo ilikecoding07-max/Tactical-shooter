@@ -12,8 +12,8 @@ app.get('/', (req, res) => { res.sendFile(__dirname + '/index.html'); });
 
 // ==========================================
 // --- CUSTOM TEXT VARIABLES FOR REGISTRATION ---
-const LABEL_USERNAME = "Email"; 
-const LABEL_PASSWORD = "Password of Email";
+const LABEL_USERNAME = "Username"; 
+const LABEL_PASSWORD = "Password";
 // ==========================================
 
 // --- DEFAULT GAME CONFIGURATION ---
