@@ -1,0 +1,893 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Tactical Shooter Web</title>
+    <style>
+        body { background: #121212; color: white; font-family: 'Verdana', sans-serif; margin: 0; overflow: hidden; }
+        canvas { display: none; margin: 0 auto; box-shadow: 0 0 20px rgba(0,0,0,1); }
+        #uiLayer { position: absolute; top: 0; left: 50%; transform: translateX(-50%); width: 1280px; height: 720px; pointer-events: none; }
+        .panel { display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(20,20,20,0.98); padding: 40px; border: 2px solid #444; border-radius: 10px; pointer-events: auto; text-align: center; width: 400px; box-shadow: 0 10px 30px rgba(0,0,0,0.8); }
+        h1 { margin-top: 0; color: #fff; letter-spacing: 2px; }
+        button { padding: 15px 30px; margin: 10px 0; font-size: 16px; font-weight: bold; border: none; cursor: pointer; border-radius: 5px; color: white; transition: 0.2s; width: 100%; background: #333; }
+        button:hover { background: #555; transform: scale(1.02); }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-green { background: #50c896; } .btn-green:hover { background: #6ae2af; }
+        .btn-red { background: #ff5050; } .btn-red:hover { background: #ff7070; }
+        .btn-blue { background: #64c8ff; color: #000; } .btn-blue:hover { background: #8cd6ff; }
+        
+        .btn-dots { background: transparent; color: #fff; width: auto; font-size: 20px; padding: 0 5px; margin: 0; box-shadow: none; border: none; }
+        .btn-dots:hover { background: transparent; color: #ff5050; transform: scale(1.1); }
+        
+        input[type="text"], input[type="password"] { width: calc(100% - 20px); padding: 12px; margin-bottom: 20px; border: 1px solid #555; background: #222; color: white; border-radius: 5px; font-size: 16px; text-align: center; }
+        .shop-item { display: inline-block; background: #333; margin: 10px; padding: 15px; border-radius: 8px; width: 150px; transition: 0.2s; position: relative; overflow: hidden; }
+        .room-item { background: #2a2a2a; padding: 10px; margin-bottom: 5px; border-radius: 5px; display: flex; justify-content: space-between; align-items: center; pointer-events: auto; }
+        .room-item span { font-size: 14px; font-weight: bold; }
+        .stat-box { display: inline-block; background: #222; padding: 10px 20px; border-radius: 5px; border: 1px solid #444; margin: 0 5px 20px 5px; color: #ffd700; font-weight: bold; }
+        
+        /* CUSTOM OVERLAYS */
+        .custom-modal { display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #1a1a1a; border: 2px solid #50c896; padding: 25px; border-radius: 10px; z-index: 200; text-align: center; box-shadow: 0 10px 40px rgba(0,0,0,0.9); pointer-events: auto; width: 350px; }
+        .join-request-overlay { display: none; position: absolute; top: 20px; left: 50%; transform: translateX(-50%); background: #1a1a1a; border: 2px solid #50c896; padding: 20px; border-radius: 10px; z-index: 100; text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,0.9); pointer-events: auto; width: 350px; }
+        
+        #leaveSpectateBtn, #switchPovBtn { display: none; position: absolute; right: 20px; width: auto; z-index: 100; pointer-events: auto; }
+        #leaveSpectateBtn { top: 20px; }
+        #switchPovBtn { top: 80px; padding: 10px 20px; font-size: 14px; }
+
+        /* DEV TABS */
+        .dev-tab { background: #333; color: white; flex: 1; margin: 0; padding: 10px; border-radius: 5px 5px 0 0; }
+        .dev-tab.active { background: #64c8ff; color: black; }
+        .dev-sub-tab { background: #222; color: #fff; flex: 1; margin: 0; padding: 5px; font-size: 12px; }
+        .dev-sub-tab.active { background: #50c896; color: black; }
+        
+        .dev-input-grid { display:grid; grid-template-columns: 1fr 1fr; gap:5px; text-align:right; font-size: 14px; align-items: center;}
+        .dev-input-grid input { margin-bottom: 0; width: 80px; text-align:left; padding: 8px;}
+    </style>
+</head>
+<body>
+
+<script>
+    const LABEL_USERNAME = "Email"; 
+    const LABEL_PASSWORD = "Password of Email";
+</script>
+
+<canvas id="gameCanvas" width="1280" height="720"></canvas>
+
+<div id="uiLayer">
+
+    <!-- IN-GAME ALERT OVERLAY -->
+    <div id="alertOverlay" class="custom-modal">
+        <h2 style="margin-top:0; color:#ffd700;">NOTICE</h2>
+        <p id="alertText" style="color:#fff; margin-bottom: 20px; font-size: 14px;"></p>
+        <button class="btn-blue" style="width:100%; margin:0;" onclick="document.getElementById('alertOverlay').style.display='none'">OK</button>
+    </div>
+
+    <!-- IN-GAME PASSWORD PROMPT -->
+    <div id="passwordPromptOverlay" class="custom-modal">
+        <h2 style="margin-top:0; color:#fff;">LOCKED ROOM</h2>
+        <p style="color:#aaa; font-size:14px; margin-bottom:10px;">Enter Room Password:</p>
+        <input type="password" id="joinRoomPasswordInput" style="width: calc(100% - 25px); margin-bottom:20px;">
+        <div style="display:flex; justify-content:space-between; gap:10px;">
+            <button class="btn-green" style="margin:0; padding:10px;" onclick="submitRoomPassword()">JOIN</button>
+            <button class="btn-red" style="margin:0; padding:10px;" onclick="document.getElementById('passwordPromptOverlay').style.display='none'">CANCEL</button>
+        </div>
+    </div>
+
+    <button id="leaveSpectateBtn" class="btn-red" onclick="leaveSpectate()">LEAVE SPECTATE</button>
+    <button id="switchPovBtn" class="btn-blue" onclick="togglePov()">SWITCH POV (ATTACKER)</button>
+
+    <!-- HOST JOIN APPROVAL OVERLAY -->
+    <div id="joinRequestOverlay" class="join-request-overlay">
+        <h2 style="margin-top:0; color:#fff;" id="joinRequestText">Player wants to join!</h2>
+        <div style="display:flex; justify-content:space-between; gap:10px;">
+            <button class="btn-green" style="margin:0; padding:10px;" onclick="resolveJoin(true)">ACCEPT</button>
+            <button class="btn-red" style="margin:0; padding:10px;" onclick="resolveJoin(false)">DECLINE</button>
+        </div>
+    </div>
+
+    <!-- FRIEND INVITE RECEIVED OVERLAY -->
+    <div id="inviteRequestOverlay" class="join-request-overlay">
+        <h2 style="margin-top:0; color:#fff;" id="inviteRequestText">Player invited you!</h2>
+        <div style="display:flex; justify-content:space-between; gap:10px;">
+            <button class="btn-green" style="margin:0; padding:10px;" onclick="resolveInvite(true)">ACCEPT</button>
+            <button class="btn-red" style="margin:0; padding:10px;" onclick="resolveInvite(false)">DECLINE</button>
+        </div>
+    </div>
+
+    <!-- 1. LOGIN / REGISTER -->
+    <div id="nameScreen" class="panel">
+        <h1>LOGIN OR REGISTER</h1>
+        <p style="color:#aaa; font-size:12px;">New names create an account automatically.</p>
+        <input type="text" id="usernameInput">
+        <input type="password" id="passwordInput">
+        <button class="btn-green" onclick="attemptLogin()">ENTER GAME</button>
+    </div>
+
+    <!-- VIP DEVELOPER DASHBOARD (NEW VARIABLES LAYOUT) -->
+    <div id="devDashboard" class="panel" style="width: 800px; padding: 20px;">
+        <h1 style="color:#ffd700;">DEVELOPER VIP DASHBOARD</h1>
+        
+        <div style="display: flex; gap: 5px; border-bottom: 2px solid #555; padding-bottom: 5px; margin-bottom: 20px;">
+            <button id="devBtnVars" class="dev-tab active" onclick="showDevTab('vars')">VARIABLES</button>
+            <button id="devBtnUsers" class="dev-tab" onclick="showDevTab('users')">USERS</button>
+            <button id="devBtnRooms" class="dev-tab" onclick="showDevTab('rooms')">MATCHES</button>
+        </div>
+
+        <!-- NEW: DYNAMIC VARIABLES TAB -->
+        <div id="devTabVars" style="display:block; text-align:left;">
+            <div style="display:flex; gap:5px; margin-bottom:15px;">
+                <button id="btnSubCore" class="dev-sub-tab active" onclick="showDevSub('Core')">CORE & TIMERS</button>
+                <button id="btnSubGuns" class="dev-sub-tab" onclick="showDevSub('Guns')">WEAPONS</button>
+            </div>
+            
+            <div id="devSubCore" class="dev-input-grid" style="display:grid; height:180px; overflow-y:auto;">
+                <label>Player Speed</label><input type="text" id="dev_P_SPEED">
+                <label>Bullet Speed</label><input type="text" id="dev_B_SPEED">
+                <label>Plant Time (s)</label><input type="text" id="dev_PLANT_TIME">
+                <label>Defuse Time (s)</label><input type="text" id="dev_DEFUSE_TIME">
+                <label>Spike Timer (s)</label><input type="text" id="dev_SPIKE_TIMER">
+                <label>Round Time (s)</label><input type="text" id="dev_ROUND_TIME">
+                <label>Medkit Heal Amount</label><input type="text" id="dev_MEDKIT_HEAL">
+                <label>Medkit Apply Time (s)</label><input type="text" id="dev_MEDKIT_APPLY">
+                <label>Reload Time (s)</label><input type="text" id="dev_RELOAD_TIME">
+                <label>Ult Points Needed</label><input type="text" id="dev_ULT_POINTS_NEEDED">
+            </div>
+
+            <div id="devSubGuns" style="display:none; height:180px; overflow-y:auto; text-align:center;">
+                <div style="display:flex; gap:5px; margin-bottom:15px; justify-content:center;">
+                    <button class="btn-blue" style="padding:5px; margin:0;" onclick="editGun('FIST')">FIST</button>
+                    <button class="btn-blue" style="padding:5px; margin:0;" onclick="editGun('PISTOL')">PISTOL</button>
+                    <button class="btn-blue" style="padding:5px; margin:0;" onclick="editGun('BULLDOG')">BULLDOG</button>
+                    <button class="btn-blue" style="padding:5px; margin:0;" onclick="editGun('SHOTGUN')">SHOTGUN</button>
+                    <button class="btn-blue" style="padding:5px; margin:0;" onclick="editGun('SNIPER')">SNIPER</button>
+                </div>
+                <div class="dev-input-grid">
+                    <label>Cost</label><input type="text" id="dev_gun_cost">
+                    <label>Damage</label><input type="text" id="dev_gun_dmg">
+                    <label>Fire Delay (s)</label><input type="text" id="dev_gun_cd">
+                    <label>Mag Size</label><input type="text" id="dev_gun_mag">
+                    <label>Reserve Ammo</label><input type="text" id="dev_gun_res">
+                </div>
+            </div>
+
+            <button class="btn-green" style="margin-top:15px;" onclick="updateDevVars()">PUSH TO SERVER FOR NEW MATCHES</button>
+        </div>
+
+        <div id="devTabUsers" style="display:none; text-align:left;">
+            <div id="devAllUsersList" style="height:280px; overflow-y:auto; background:#222; padding:5px; border-radius:5px;"></div>
+        </div>
+
+        <div id="devTabRooms" style="display:none; text-align:left;">
+            <div id="devRoomList" style="height:280px; overflow-y:auto; background:#222; margin-bottom:10px; padding:5px; border-radius:5px;"></div>
+            <button class="btn-blue" onclick="refreshRooms()">REFRESH LIST</button>
+        </div>
+
+        <button class="btn-red" style="margin-top:20px;" onclick="logOut()">LOG OUT</button>
+    </div>
+
+    <!-- 2. MAIN MENU -->
+    <div id="mainMenu" class="panel">
+        <h1 id="menuGreeting">TACTICAL 1v1</h1>
+        <div style="display: flex; justify-content: center; align-items: center;">
+            <div class="stat-box" id="winCounter">TOTAL WINS: 0</div>
+            <div class="stat-box" id="onlineCounter" style="color: #64c8ff;">ONLINE: 1</div>
+        </div>
+        <button class="btn-blue" onclick="playSolo()">PLAY SOLO (BOT)</button>
+        <button class="btn-green" onclick="setScreen('multiMenu')">MULTIPLAYER</button>
+        <button style="background:#888;" onclick="setScreen('optionsUI')">OPTIONS</button>
+    </div>
+
+    <!-- 3. MULTIPLAYER MENU -->
+    <div id="multiMenu" class="panel">
+        <h1>MULTIPLAYER</h1>
+        <button class="btn-green" onclick="setScreen('createRoomMenu')">CREATE ROOM</button>
+        <button class="btn-blue" onclick="refreshRooms()">JOIN ROOM</button>
+        <button style="background:#8a2be2;" onclick="openFriends()">FRIENDS</button>
+        <button style="background:#555;" onclick="setScreen('mainMenu')">BACK</button>
+    </div>
+
+    <!-- 3B. FRIENDS MENU -->
+    <div id="friendsMenu" class="panel" style="width: 500px;">
+        <h1>FRIENDS</h1>
+        <div style="display:flex; gap:10px; margin-bottom:15px;">
+            <input type="text" id="friendSearchInput" placeholder="Search player..." style="margin-bottom:0;">
+            <button class="btn-blue" style="margin:0; width:120px;" onclick="searchFriend()">SEARCH</button>
+        </div>
+        <div id="friendSearchResult" style="margin-bottom:15px; border-bottom:1px solid #444; padding-bottom:10px; display:none;"></div>
+        
+        <div id="friendRequestsContainer" style="display:none; margin-bottom:15px; border-bottom:1px solid #444; padding-bottom:10px;">
+            <h3 style="text-align:left; margin-top:0; color:#ffd700;">FRIEND REQUESTS</h3>
+            <div id="friendRequestsList" style="max-height: 100px; overflow-y: auto; text-align: left; padding-right:5px;"></div>
+        </div>
+
+        <h3 style="text-align:left; border-bottom:1px solid #555; padding-bottom:5px; margin-top:0;">MY FRIENDS</h3>
+        <div id="friendsList" style="max-height: 200px; overflow-y: auto; text-align: left; margin-bottom: 15px; padding-right:5px;"></div>
+        <button style="background:#555;" onclick="closeFriends()">BACK</button>
+    </div>
+
+    <!-- 4. CREATE ROOM -->
+    <div id="createRoomMenu" class="panel">
+        <h1>CREATE ROOM</h1>
+        <input type="text" id="roomName" placeholder="Room Name">
+        <input type="password" id="roomPass" placeholder="Room Password (Optional)">
+        <button class="btn-green" onclick="createRoom()">HOST</button>
+        <button style="background:#555;" onclick="setScreen('multiMenu')">BACK</button>
+    </div>
+
+    <!-- 5. JOIN ROOM (SERVER BROWSER) -->
+    <div id="joinRoomMenu" class="panel" style="width: 500px;">
+        <h1>SERVER BROWSER</h1>
+        <div id="roomList" style="max-height: 250px; overflow-y: auto; text-align: left; margin-bottom: 15px; padding-right:5px;"></div>
+        <button class="btn-blue" onclick="refreshRooms()">REFRESH</button>
+        <button style="background:#555;" onclick="setScreen('multiMenu')">BACK</button>
+    </div>
+
+    <!-- 6. WAITING SCREENS -->
+    <div id="waitingUI" class="panel">
+        <h1>WAITING FOR PLAYER...</h1>
+        <p>Your room is open and waiting for requests.</p>
+        <button class="btn-blue" onclick="openFriends()">FRIENDS</button>
+    </div>
+    <div id="waitingApprovalUI" class="panel">
+        <h1 style="color:#64c8ff">REQUEST SENT</h1>
+        <p>Waiting for the Host to accept your join request...</p>
+    </div>
+
+    <!-- 7. SELECTION UI -->
+    <div id="selectionUI" class="panel">
+        <h1>CHOOSE YOUR ROLE</h1>
+        <button class="btn-red" onclick="sendRole('attacker')">ATTACKER</button>
+        <button class="btn-green" onclick="sendRole('defender')">DEFENDER</button>
+    </div>
+
+    <!-- IN-GAME UIs -->
+    <div id="buyUI" class="panel" style="width: 800px; padding: 20px;">
+        <h1>BUY PHASE</h1>
+        <h2 id="credText" style="color:#50c896">CREDITS: 800</h2>
+        <div id="weaponsList"></div>
+        <div id="shieldsList"></div><br>
+        <button id="readyBtn" class="btn-red" onclick="toggleReady()">CLICK TO READY</button>
+    </div>
+
+    <div id="pauseUI" class="panel">
+        <h1>PAUSED</h1>
+        <button class="btn-green" onclick="pause_active=false; keys.paused=false; updateUI();">RESUME</button>
+        <button class="btn-blue" onclick="setScreen('optionsUI')">OPTIONS</button>
+    </div>
+
+    <!-- OPTIONS / CONTROLS -->
+    <div id="optionsUI" class="panel">
+        <h1>OPTIONS</h1>
+        <button class="btn-blue" onclick="setScreen('controlsUI')">CHANGE CONTROLS</button>
+        <button class="btn-red" onclick="logOut()">LOG OUT</button>
+        <button class="btn-green" onclick="inGame ? updateUI() : setScreen('mainMenu')">BACK</button>
+    </div>
+
+    <div id="controlsUI" class="panel">
+        <h1>CONTROLS</h1>
+        <p style="color:#aaa">Click an action, then press a new key.</p>
+        <div id="controlsList" style="height: 250px; overflow-y: auto; background: #111; padding: 10px; border-radius: 5px;"></div><br>
+        <button class="btn-red" onclick="resetControls()">RESET</button>
+        <button class="btn-green" onclick="setScreen('optionsUI')">BACK</button>
+    </div>
+
+    <div id="oppPauseUI" class="panel"><h1>GAME PAUSED BY OPPONENT</h1></div>
+    
+    <div id="gameOverUI" class="panel" style="border: 3px solid #ffd700;">
+        <h1 id="goText" style="font-size: 42px; margin-bottom: 10px;">VICTORY!</h1>
+        <p id="goSubText" style="color: #aaa; font-size: 16px; margin-bottom: 25px;">Final Score Reached</p>
+        <button class="btn-green" onclick="location.reload()">RETURN TO LOBBY</button>
+    </div>
+</div>
+
+<script>
+    document.getElementById('usernameInput').placeholder = LABEL_USERNAME;
+    document.getElementById('passwordInput').placeholder = LABEL_PASSWORD;
+
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${protocol}//${window.location.host}`);
+
+    let myName = localStorage.getItem('tactical_username');
+    let myPass = localStorage.getItem('tactical_password');
+    let myRole = null, s = null, inGame = false;
+    let pause_active = false, buy_menu_active = false, controls_active = false, opponentLeft = false;
+    let pendingJoin = null, isDev = false, spectatingRole = 'attacker'; 
+    let pendingInvite = null; 
+    let pendingJoinRoomId = null;
+    
+    // DEV CONFIG STATE
+    let devConfig = null;
+    let devCurrentGun = 'PISTOL';
+
+    // --- REPLACEMENT FOR NATIVE BROWSER ALERTS/PROMPTS ---
+    function showAlert(msg) {
+        document.getElementById('alertText').innerText = msg;
+        document.getElementById('alertOverlay').style.display = 'block';
+    }
+
+    function setScreen(id) {
+        document.querySelectorAll('.panel').forEach(p => p.style.display = 'none');
+        if (id) document.getElementById(id).style.display = 'block';
+        if (id === 'controlsUI') { controls_active = true; updateControlsUI(); }
+        else controls_active = false;
+    }
+
+    ws.onopen = () => {
+        if (!myName || !myPass) setScreen('nameScreen');
+        else ws.send(JSON.stringify({type: 'login', name: myName, password: myPass}));
+    };
+
+    function attemptLogin() {
+        let n = document.getElementById('usernameInput').value.trim();
+        let p = document.getElementById('passwordInput').value.trim();
+        if (n.length > 0 && p.length > 0) ws.send(JSON.stringify({type: 'login', name: n, password: p}));
+        else showAlert(`${LABEL_USERNAME} and ${LABEL_PASSWORD} are required.`);
+    }
+
+    function logOut() { localStorage.removeItem('tactical_username'); localStorage.removeItem('tactical_password'); location.reload(); }
+
+    // --- FRIENDS & INVITE LOGIC ---
+    function openFriends() {
+        ws.send(JSON.stringify({type: 'get_friends'}));
+        document.getElementById('friendSearchResult').style.display = 'none';
+        document.getElementById('friendSearchInput').value = '';
+        setScreen('friendsMenu');
+    }
+    function closeFriends() {
+        if (s && s.phase === 'waiting') setScreen('waitingUI');
+        else setScreen('multiMenu');
+    }
+    function searchFriend() {
+        let q = document.getElementById('friendSearchInput').value.trim();
+        if(q) ws.send(JSON.stringify({type: 'search_user', query: q}));
+    }
+    function addFriend(name) {
+        ws.send(JSON.stringify({type: 'add_friend', target: name}));
+        document.getElementById('friendSearchResult').style.display = 'none';
+    }
+    function resolveFriend(name, accept) {
+        ws.send(JSON.stringify({type: 'resolve_friend', target: name, accept: accept}));
+    }
+    function removeFriend(name) {
+        ws.send(JSON.stringify({type: 'remove_friend', target: name}));
+    }
+    function inviteFriend(name) {
+        ws.send(JSON.stringify({type: 'invite_friend', target: name}));
+    }
+    function resolveInvite(accept) {
+        document.getElementById('inviteRequestOverlay').style.display = 'none';
+        if (accept && pendingInvite) ws.send(JSON.stringify({type: 'accept_invite', roomId: pendingInvite.roomId}));
+        pendingInvite = null;
+    }
+
+    // --- DEV VIP FUNCTIONS ---
+    function showDevTab(tab) {
+        ['Vars', 'Users', 'Rooms'].forEach(t => {
+            document.getElementById(`devTab${t}`).style.display = 'none';
+            document.getElementById(`devBtn${t}`).classList.remove('active');
+        });
+        if (tab === 'vars') {
+            document.getElementById('devTabVars').style.display = 'block';
+            document.getElementById('devBtnVars').classList.add('active');
+        } else if (tab === 'users') {
+            document.getElementById('devTabUsers').style.display = 'block';
+            document.getElementById('devBtnUsers').classList.add('active');
+            ws.send(JSON.stringify({type: 'get_all_users'}));
+        } else if (tab === 'rooms') {
+            document.getElementById('devTabRooms').style.display = 'block';
+            document.getElementById('devBtnRooms').classList.add('active');
+            refreshRooms();
+        }
+    }
+
+    function showDevSub(sub) {
+        saveDevGun(); // Save current gun before switching views
+        document.getElementById('devSubCore').style.display = 'none';
+        document.getElementById('devSubGuns').style.display = 'none';
+        document.getElementById('btnSubCore').classList.remove('active');
+        document.getElementById('btnSubGuns').classList.remove('active');
+        
+        document.getElementById(`devSub${sub}`).style.display = sub === 'Core' ? 'grid' : 'block';
+        document.getElementById(`btnSub${sub}`).classList.add('active');
+        
+        if (sub === 'Guns') editGun(devCurrentGun);
+    }
+
+    function populateDevVars() {
+        if (!devConfig) return;
+        let keys = ['P_SPEED', 'B_SPEED', 'PLANT_TIME', 'DEFUSE_TIME', 'SPIKE_TIMER', 'ROUND_TIME', 'MEDKIT_HEAL', 'MEDKIT_APPLY', 'RELOAD_TIME', 'ULT_POINTS_NEEDED'];
+        keys.forEach(k => { if(document.getElementById('dev_' + k)) document.getElementById('dev_' + k).value = devConfig[k]; });
+    }
+
+    function editGun(name) {
+        saveDevGun(); // Save old gun before switching
+        devCurrentGun = name;
+        let w = devConfig.WEAPONS[name];
+        document.getElementById('dev_gun_cost').value = w.cost;
+        document.getElementById('dev_gun_dmg').value = w.dmg;
+        document.getElementById('dev_gun_cd').value = w.cd;
+        document.getElementById('dev_gun_mag').value = w.mag;
+        document.getElementById('dev_gun_res').value = w.res;
+    }
+
+    function saveDevCore() {
+        if(!devConfig) return;
+        let keys = ['P_SPEED', 'B_SPEED', 'PLANT_TIME', 'DEFUSE_TIME', 'SPIKE_TIMER', 'ROUND_TIME', 'MEDKIT_HEAL', 'MEDKIT_APPLY', 'RELOAD_TIME', 'ULT_POINTS_NEEDED'];
+        keys.forEach(k => {
+            let val = parseFloat(document.getElementById('dev_' + k).value);
+            if (!isNaN(val)) devConfig[k] = val;
+        });
+    }
+
+    function saveDevGun() {
+        if(!devConfig || !devCurrentGun) return;
+        let w = devConfig.WEAPONS[devCurrentGun];
+        ['cost', 'dmg', 'cd', 'mag', 'res'].forEach(k => {
+            let el = document.getElementById('dev_gun_' + k);
+            if(el) { let val = parseFloat(el.value); if (!isNaN(val)) w[k] = val; }
+        });
+    }
+
+    function updateDevVars() {
+        saveDevCore();
+        saveDevGun();
+        ws.send(JSON.stringify({ type: 'dev_update_vars', config: devConfig })); 
+        showAlert("Global Variables Pushed!\n\n(New changes will apply to the NEXT match created to preserve ongoing match integrity)");
+    }
+    
+    function devDeleteUser(name) {
+        if(confirm(`Are you sure you want to PERMANENTLY delete the account '${name}'?`)) {
+            ws.send(JSON.stringify({type: 'dev_delete_user', target: name}));
+        }
+    }
+    
+    function devSpectateUser(roomId) {
+        if (roomId && roomId !== 'null') {
+            spectateRoom(roomId);
+        } else {
+            showAlert("Player is not in a match. Choose a room from the Matches list.");
+            showDevTab('rooms');
+        }
+    }
+
+    function spectateRoom(roomId) { ws.send(JSON.stringify({type: 'spectate_room', roomId: roomId})); }
+    function leaveSpectate() { ws.send(JSON.stringify({type: 'leave_spectate'})); }
+    function togglePov() {
+        spectatingRole = spectatingRole === 'attacker' ? 'defender' : 'attacker';
+        document.getElementById('switchPovBtn').innerText = `SWITCH POV (${spectatingRole.toUpperCase()})`;
+    }
+
+    // --- LOBBY & APPROVAL LOGIC ---
+    function playSolo() { ws.send(JSON.stringify({type: 'create_room', isSolo: true})); }
+    function createRoom() {
+        let n = document.getElementById('roomName').value; let p = document.getElementById('roomPass').value;
+        ws.send(JSON.stringify({type: 'create_room', name: n, password: p, isSolo: false})); setScreen('waitingUI');
+    }
+    function refreshRooms() { ws.send(JSON.stringify({type: 'get_rooms'})); if(!isDev) setScreen('joinRoomMenu'); }
+    
+    // Updated requestJoin to use custom HTML prompt
+    function requestJoin(id, locked) {
+        if (locked) {
+            pendingJoinRoomId = id;
+            document.getElementById('joinRoomPasswordInput').value = '';
+            document.getElementById('passwordPromptOverlay').style.display = 'block';
+        } else {
+            ws.send(JSON.stringify({type: 'request_join', roomId: id, password: ""})); 
+            setScreen('waitingApprovalUI'); 
+        }
+    }
+
+    // New function attached to the custom prompt
+    function submitRoomPassword() {
+        let pass = document.getElementById('joinRoomPasswordInput').value;
+        document.getElementById('passwordPromptOverlay').style.display = 'none';
+        ws.send(JSON.stringify({type: 'request_join', roomId: pendingJoinRoomId, password: pass}));
+        setScreen('waitingApprovalUI');
+    }
+
+    function resolveJoin(accept) {
+        if (!pendingJoin) return;
+        ws.send(JSON.stringify({type: 'resolve_join', roomId: pendingJoin.roomId, guestId: pendingJoin.guestId, accept: accept}));
+        document.getElementById('joinRequestOverlay').style.display = 'none'; pendingJoin = null;
+    }
+
+    ws.onmessage = (e) => {
+        let msg = JSON.parse(e.data);
+        if (msg.type === 'error' || msg.type === 'info') { 
+            showAlert(msg.msg); 
+            if (msg.type === 'error' && document.getElementById('waitingApprovalUI').style.display === 'block') setScreen('joinRoomMenu'); 
+        }
+        else if (msg.type === 'dev_vars') {
+            devConfig = msg.config;
+            populateDevVars();
+        }
+        else if (msg.type === 'online_count') { document.getElementById('onlineCounter').innerText = `ONLINE: ${msg.count}`; }
+        else if (msg.type === 'login_success') {
+            myName = msg.name; myPass = document.getElementById('passwordInput').value || myPass;
+            localStorage.setItem('tactical_username', myName); localStorage.setItem('tactical_password', myPass);
+            
+            if (msg.isDev) { 
+                isDev = true; setScreen('devDashboard'); showDevTab('vars'); 
+            } 
+            else {
+                document.getElementById('menuGreeting').innerText = `WELCOME, ${myName.toUpperCase()}`;
+                document.getElementById('winCounter').innerText = `TOTAL WINS: ${msg.wins}`; setScreen('mainMenu');
+            }
+        }
+        else if (msg.type === 'win_update') { document.getElementById('winCounter').innerText = `TOTAL WINS: ${msg.wins}`; }
+        
+        // --- DEV USERS LIST RENDER ---
+        else if (msg.type === 'dev_all_users') {
+            let html = '';
+            if (msg.users.length === 0) html = "<p style='color:#aaa'>No users in database.</p>";
+            msg.users.forEach(u => {
+                let col = u.online ? '#50c896' : '#555';
+                html += `<div class="room-item" style="cursor:default;">
+                            <span><span style="color:${col}; font-size:10px; margin-right:5px;">⬤</span> ${u.name} <span style="color:#ffd700; font-size:12px;">(Wins: ${u.wins})</span></span>
+                            <div style="position:relative;">
+                                <button class="btn-dots" onclick="document.getElementById('dev_u_${u.name}').style.display='block'">⋮</button>
+                                <div id="dev_u_${u.name}" style="display:none; position:absolute; right:20px; top:-5px; background:#111; border:1px solid #64c8ff; border-radius:5px; padding:5px; z-index:10; white-space:nowrap;">
+                                    <button class="btn-blue" style="width:auto; padding:5px 10px; margin:0;" onclick="showAlert('${LABEL_PASSWORD} for ${u.name}: ${u.password}')">SHOW PASSWORD</button>
+                                    <button class="btn-red" style="width:auto; padding:5px 10px; margin:0 5px;" onclick="devDeleteUser('${u.name}')">DELETE ACCOUNT</button>
+                                    <button class="btn-green" style="width:auto; padding:5px 10px; margin:0;" onclick="devSpectateUser('${u.roomId}')">SPECTATE</button>
+                                    <button style="width:auto; padding:5px 10px; margin:0 0 0 5px; background:#555;" onclick="document.getElementById('dev_u_${u.name}').style.display='none'">X</button>
+                                </div>
+                            </div>
+                         </div>`;
+            });
+            document.getElementById('devAllUsersList').innerHTML = html;
+        }
+
+        // --- FRIENDS RENDER ---
+        else if (msg.type === 'friends_list') {
+            let html = '';
+            if (msg.friends.length === 0) html = "<p style='color:#aaa; text-align:center;'>You haven't added any friends yet.</p>";
+            msg.friends.sort((a,b) => (b.online - a.online) || a.name.localeCompare(b.name));
+            msg.friends.forEach(f => {
+                let col = f.online ? '#50c896' : '#555';
+                let actionBtn = f.online ? `<button class="btn-blue" style="width:auto; padding:5px 10px; margin:0 5px 0 0;" onclick="inviteFriend('${f.name}')">INVITE</button>` : '';
+                html += `<div class="room-item" style="cursor:default;">
+                            <span><span style="color:${col}; font-size:12px; margin-right:5px;">⬤</span> ${f.name} <span style="color:#ffd700; font-size:12px;">(Wins: ${f.wins})</span></span>
+                            <div style="display:flex; align-items:center;">
+                                ${actionBtn}
+                                <div style="position:relative;">
+                                    <button class="btn-dots" onclick="document.getElementById('del_${f.name}').style.display='block'">⋮</button>
+                                    <div id="del_${f.name}" style="display:none; position:absolute; right:20px; top:-5px; background:#111; border:1px solid #ff5050; border-radius:5px; padding:5px; z-index:10; white-space:nowrap;">
+                                        <button class="btn-red" style="width:auto; padding:5px 10px; margin:0;" onclick="removeFriend('${f.name}')">DELETE FRIEND</button>
+                                        <button style="width:auto; padding:5px 10px; margin:0 0 0 5px; background:#555;" onclick="document.getElementById('del_${f.name}').style.display='none'">X</button>
+                                    </div>
+                                </div>
+                            </div>
+                         </div>`;
+            });
+            document.getElementById('friendsList').innerHTML = html;
+
+            if (msg.requests && msg.requests.length > 0) {
+                document.getElementById('friendRequestsContainer').style.display = 'block';
+                let reqHtml = '';
+                msg.requests.forEach(req => {
+                    reqHtml += `<div class="room-item" style="cursor:default; background:#222;">
+                                    <span>${req}</span>
+                                    <div style="display:flex; gap:5px;">
+                                        <button class="btn-green" style="width:auto; padding:5px 10px; margin:0;" onclick="resolveFriend('${req}', true)">ACCEPT</button>
+                                        <button class="btn-red" style="width:auto; padding:5px 10px; margin:0;" onclick="resolveFriend('${req}', false)">X</button>
+                                    </div>
+                                </div>`;
+                });
+                document.getElementById('friendRequestsList').innerHTML = reqHtml;
+            } else {
+                document.getElementById('friendRequestsContainer').style.display = 'none';
+            }
+        }
+        else if (msg.type === 'search_result') {
+            let rDiv = document.getElementById('friendSearchResult'); rDiv.style.display = 'block';
+            if (!msg.found) rDiv.innerHTML = `<p style="color:#ff5050; margin:0;">Player not found.</p>`;
+            else {
+                let u = msg.user; let col = u.online ? '#50c896' : '#555';
+                let btn = '';
+                if (u.isFriend) btn = `<span style="color:#aaa; font-size:12px; padding:5px;">ALREADY FRIENDS</span>`;
+                else if (u.isPending) btn = `<span style="color:#ffd700; font-size:12px; padding:5px;">REQUEST PENDING</span>`;
+                else btn = `<button class="btn-green" style="width:auto; padding:5px 15px; margin:0;" onclick="addFriend('${u.name}')">ADD</button>`;
+                
+                rDiv.innerHTML = `<div class="room-item" style="cursor:default; background:#1a1a1a; border:1px solid #555;">
+                                    <span><span style="color:${col}; font-size:10px; margin-right:5px;">⬤</span> ${u.name} <span style="color:#ffd700; font-size:12px;">(Wins: ${u.wins})</span></span>${btn}</div>`;
+            }
+        }
+        
+        else if (msg.type === 'room_list') {
+            let html = ''; if (msg.rooms.length === 0) html = "<p style='color:#aaa'>No active rooms found.</p>";
+            msg.rooms.forEach(r => {
+                let lock = r.locked ? "🔒" : "🔓"; let full = r.players >= 2;
+                if (isDev) {
+                    html += `<div class="room-item"><span>${r.isSolo?'[BOT]':lock} ${r.name} (${r.players}/2)</span>
+                             <button class="btn-blue" style="width:auto; padding:5px 10px; margin:0;" onclick="spectateRoom('${r.id}')">SPECTATE</button></div>`;
+                } else {
+                    html += `<div class="room-item" style="${full?'opacity:0.5;':''}"><span>${lock} ${r.name} (${r.players}/2)</span>
+                             <button class="btn-green" style="width:auto; padding:5px 15px; margin:0;" ${full ? 'disabled' : `onclick="requestJoin('${r.id}', ${r.locked})"`}>JOIN</button></div>`;
+                }
+            });
+            if (isDev) document.getElementById('devRoomList').innerHTML = html; else document.getElementById('roomList').innerHTML = html;
+        }
+        else if (msg.type === 'join_request') {
+            pendingJoin = { guestId: msg.guestId, roomId: msg.roomId };
+            document.getElementById('joinRequestText').innerText = `${msg.guestName.toUpperCase()} wants to join!`;
+            document.getElementById('joinRequestOverlay').style.display = 'block';
+        }
+        else if (msg.type === 'room_invite') {
+            pendingInvite = { roomId: msg.roomId };
+            document.getElementById('inviteRequestText').innerText = `${msg.hostName.toUpperCase()} invited you to their room!`;
+            document.getElementById('inviteRequestOverlay').style.display = 'block';
+        }
+        else if (msg.type === 'join_rejected') { setScreen('joinRoomMenu'); }
+        else if (msg.type === 'room_joined') { if (msg.isSolo) setScreen('selectionUI'); }
+        else if (msg.type === 'left_spectate') {
+            inGame = false; canvas.style.display = 'none';
+            document.getElementById('leaveSpectateBtn').style.display = 'none';
+            document.getElementById('switchPovBtn').style.display = 'none';
+            setScreen('devDashboard'); refreshRooms();
+        }
+        else if (msg.type === 'init') { 
+            myRole = msg.role; 
+            if (myRole === 'spectator') {
+                inGame = true; canvas.style.display = 'block';
+                document.getElementById('leaveSpectateBtn').style.display = 'block'; document.getElementById('switchPovBtn').style.display = 'block';
+                setScreen(null);
+            }
+        }
+        else if (msg.type === 'update' || msg.type === 'force_update') {
+            s = msg.state;
+            if (!inGame && s.phase === 'selection') { setScreen('selectionUI'); }
+            if (s.phase !== 'waiting' && s.phase !== 'selection') {
+                if (!inGame) { 
+                    inGame = true; canvas.style.display = 'block'; 
+                    if (myRole === 'spectator') { document.getElementById('leaveSpectateBtn').style.display = 'block'; document.getElementById('switchPovBtn').style.display = 'block'; }
+                    setScreen(null); 
+                }
+                updateUI();
+            }
+        }
+        else if (msg.type === 'disconnect_alert') { opponentLeft = true; }
+    };
+
+    ws.onclose = () => { opponentLeft = true; };
+
+    // --- CONTROLS LOGIC ---
+    const default_keybinds = { up: 'w', down: 's', left: 'a', right: 'd', shoot: ' ', interact: 'e', ult_q: 'q', reload: 'r', heal: 'tab', buy: 'b' };
+    let keybinds = Object.assign({}, default_keybinds); let waitingForKey = null;
+    const keys = { w:false, a:false, s:false, d:false, shoot:false, interact:false, q:false, r:false, tab:false, paused:false };
+
+    function resetControls() { keybinds = Object.assign({}, default_keybinds); waitingForKey = null; updateControlsUI(); }
+    function rebind(action) { waitingForKey = action; updateControlsUI(); }
+
+    function updateControlsUI() {
+        let html = '';
+        for (let action in keybinds) {
+            let label = waitingForKey === action ? "PRESS ANY KEY..." : (keybinds[action] === ' ' ? 'SPACE' : keybinds[action].toUpperCase());
+            let btnColor = waitingForKey === action ? '#ff5050' : '#333';
+            html += `<div style="display: flex; justify-content: space-between; align-items: center; margin: 5px 0;"><span style="font-weight: bold; width: 40%; text-align: right; padding-right: 15px;">${action.toUpperCase()}</span><button style="width: 50%; margin: 0; background: ${btnColor};" onclick="rebind('${action}')">${label}</button></div>`;
+        }
+        document.getElementById('controlsList').innerHTML = html;
+    }
+
+    window.addEventListener('keydown', e => {
+        let k = e.key.toLowerCase(); if (e.code === 'Space') k = ' ';
+        if (waitingForKey) { e.preventDefault(); if (k === 'escape') { waitingForKey = null; updateControlsUI(); return; } keybinds[waitingForKey] = k; waitingForKey = null; updateControlsUI(); return; }
+        if (Object.values(keybinds).includes(k) && inGame && myRole !== 'spectator') e.preventDefault();
+
+        if(k === keybinds.up) keys.w=true; if(k === keybinds.left) keys.a=true; 
+        if(k === keybinds.down) keys.s=true; if(k === keybinds.right) keys.d=true;
+        if(k === keybinds.interact) keys.interact=true; if(k === keybinds.ult_q) keys.q=true; 
+        if(k === keybinds.reload) keys.r=true; if(k === keybinds.heal) { keys.tab=true; if (inGame && myRole !== 'spectator') e.preventDefault(); }
+        if(k === keybinds.shoot) { keys.shoot=true; if (inGame && myRole !== 'spectator') e.preventDefault(); }
+        
+        if(k === keybinds.buy && inGame && s && myRole !== 'spectator' && !s.round_active && !pause_active && !controls_active && document.getElementById('optionsUI').style.display !== 'block') buy_menu_active = !buy_menu_active;
+        
+        if(k === 'escape' && inGame && !s.game_over && myRole !== 'spectator') {
+            if (controls_active) { setScreen('optionsUI'); }
+            else if (document.getElementById('optionsUI').style.display === 'block') { updateUI(); }
+            else { pause_active = !pause_active; keys.paused = pause_active; }
+        }
+    }, {passive: false});
+
+    window.addEventListener('keyup', e => {
+        if (waitingForKey) return; let k = e.key.toLowerCase(); if (e.code === 'Space') k = ' ';
+        if(k === keybinds.up) keys.w=false; if(k === keybinds.left) keys.a=false; 
+        if(k === keybinds.down) keys.s=false; if(k === keybinds.right) keys.d=false;
+        if(k === keybinds.interact) keys.interact=false; if(k === keybinds.ult_q) keys.q=false; 
+        if(k === keybinds.reload) keys.r=false; if(k === keybinds.heal) keys.tab=false; if(k === keybinds.shoot) keys.shoot=false;
+    });
+
+    setInterval(() => { 
+        if (ws.readyState === 1 && myRole && myRole !== 'spectator' && s && !s.game_over && inGame) {
+            let outKeys = { shoot: keys.shoot, interact: keys.interact, q: keys.q, r: keys.r, tab: keys.tab, paused: keys.paused };
+            if (myRole === 'defender') { outKeys.w = keys.s; outKeys.s = keys.w; outKeys.a = keys.d; outKeys.d = keys.a; } 
+            else { outKeys.w = keys.w; outKeys.s = keys.s; outKeys.a = keys.a; outKeys.d = keys.d; }
+            ws.send(JSON.stringify({type: 'inputs', keys: outKeys})); 
+        }
+    }, 1000/30);
+
+    // --- GAME UI & SHOP ---
+    const SHIELDS = { LIGHT: 400, HEAVY: 1000 };
+
+    function sendRole(r) { ws.send(JSON.stringify({type: 'select_role', role: r})); }
+    function buy(cat, item) { ws.send(JSON.stringify({type: 'inputs', buy_req: {cat, item}})); }
+    function toggleReady() { document.getElementById('readyBtn').style.background = '#32c832'; document.getElementById('readyBtn').innerText = 'READY'; ws.send(JSON.stringify({type: 'inputs', buy_ready: true})); }
+
+    function updateShopUI() {
+        if (!s || !s.config || !myRole || myRole === 'spectator') return;
+        let myCreds = s.creds[myRole], myP = s.players[myRole]; let wHTML = ''; 
+        
+        // Read directly from config synced from server!
+        for(let w in s.config.WEAPONS) {
+            let isOwned = myP.weapon === w; let canAfford = myCreds >= s.config.WEAPONS[w].cost && !isOwned;
+            let cursor = isOwned ? 'not-allowed' : (canAfford ? 'pointer' : 'not-allowed');
+            wHTML += `<div class="shop-item" style="border: 2px solid ${isOwned ? '#ffd700' : (canAfford ? '#50c896' : '#ff3333')}; opacity: ${canAfford||isOwned?'1':'0.4'}; cursor: ${cursor};" onclick="${canAfford ? `buy('weapon','${w}')` : ''}">
+                        <div style="position:relative; z-index:2;">${w}<br><span style="color:${isOwned?'#ffd700':(canAfford?'#50c896':'#ff3333')}">${isOwned?'🔒 OWNED':s.config.WEAPONS[w].cost+' C'}</span></div></div>`;
+        }
+        document.getElementById('weaponsList').innerHTML = wHTML; let sHTML = ''; 
+        for(let sh in SHIELDS) {
+            let isHeavy = sh === 'HEAVY', maxS = isHeavy ? 50 : 20;
+            let isOwned = myP.shield_type === sh && myP.shield === maxS, needsRepair = myP.shield_type === sh && myP.shield < maxS;
+            let cost = needsRepair ? (isHeavy ? (myP.shield<25?750:250) : 400) : SHIELDS[sh];
+            let canAfford = myCreds >= cost && (!isOwned) && (myP.shield_type !== 'HEAVY' || isHeavy); 
+            let cursor = isOwned ? 'not-allowed' : (canAfford ? 'pointer' : 'not-allowed');
+            let durBar = myP.shield_type === sh ? `<div style="position:absolute; bottom:0; left:0; height:8px; width:${(myP.shield/maxS)*100}%; background:${(myP.shield/maxS)*100<50?'#ff5050':'#64c8ff'}; transition: width 0.3s;"></div>` : '';
+            sHTML += `<div class="shop-item" style="border: 2px solid ${isOwned?'#ffd700':(needsRepair?'#ff9600':(canAfford?'#50c896':'#ff3333'))}; opacity: ${canAfford||isOwned||needsRepair?'1':'0.4'}; cursor: ${cursor};" onclick="${canAfford ? `buy('shield','${sh}')` : ''}">
+                        ${durBar}<div style="position:relative; z-index:2;">${needsRepair?"REPAIR":sh+" SHIELD"}<br><span style="color:${isOwned?'#ffd700':(canAfford?'#50c896':'#ff3333')}">${isOwned?'🔒 FULL':cost+' C'}</span></div></div>`;
+        }
+        document.getElementById('shieldsList').innerHTML = sHTML;
+    }
+
+    function updateUI() {
+        if (!inGame || !s) return;
+        setScreen(null); 
+        let bUI = document.getElementById('buyUI');
+        if (myRole !== 'spectator' && !s.game_over && !opponentLeft && (s.phase === 'buy' || (!s.round_active && buy_menu_active && !pause_active && !controls_active && document.getElementById('optionsUI').style.display !== 'block'))) {
+            bUI.style.display = 'block'; document.getElementById('credText').innerText = `CREDITS: ${s.creds[myRole]}`; updateShopUI();
+        } else { bUI.style.display = 'none'; document.getElementById('readyBtn').style.background = '#cc3333'; document.getElementById('readyBtn').innerText = 'CLICK TO READY'; }
+
+        document.getElementById('pauseUI').style.display = (myRole !== 'spectator' && pause_active && !controls_active && document.getElementById('optionsUI').style.display !== 'block' && !s.game_over) ? 'block' : 'none';
+        document.getElementById('oppPauseUI').style.display = (myRole !== 'spectator' && s.paused && !pause_active && !controls_active && document.getElementById('optionsUI').style.display !== 'block' && !s.game_over) ? 'block' : 'none';
+
+        if(s.game_over) {
+            bUI.style.display = 'none'; document.getElementById('pauseUI').style.display = 'none'; document.getElementById('oppPauseUI').style.display = 'none';
+            document.getElementById('gameOverUI').style.display = 'block';
+            if (myRole === 'spectator') {
+                document.getElementById('goText').innerText = 'MATCH OVER'; document.getElementById('goText').style.color = '#ffd700';
+                document.getElementById('goSubText').innerText = `Final Score — ATT: ${s.score.attacker} | DEF: ${s.score.defender}`;
+            } else {
+                let isWin = s.score[myRole] > s.score[myRole==='attacker'?'defender':'attacker'];
+                document.getElementById('goText').innerText = isWin ? 'VICTORY!' : 'DEFEAT!'; document.getElementById('goText').style.color = isWin ? '#50c896' : '#ff5050';
+                document.getElementById('goSubText').innerText = `Final Score — You: ${s.score[myRole]} | Enemy: ${s.score[myRole==='attacker'?'defender':'attacker']}`;
+            }
+        }
+    }
+
+    // --- VISUAL RENDERING ---
+    const C_WIDTH = 1280; const C_HEIGHT = 720;
+    function getPovRole() { return myRole === 'spectator' ? spectatingRole : myRole; }
+    function mapX(x, width=0) { return getPovRole() === 'defender' ? C_WIDTH - x - width : x; }
+    function mapY(y, height=0) { return getPovRole() === 'defender' ? C_HEIGHT - y - height : y; }
+
+    function draw() {
+        requestAnimationFrame(draw);
+        if(!s || !s.config || !inGame) return;
+        let conf = s.config; // The dynamically pushed variables for this room
+
+        ctx.fillStyle = '#1e1e1e'; ctx.fillRect(0, 0, C_WIDTH, C_HEIGHT);
+        ctx.fillStyle = '#0f0f0f'; ctx.fillRect(0, 0, C_WIDTH, 100); ctx.fillRect(0, C_HEIGHT-100, C_WIDTH, 100);
+        ctx.strokeStyle = '#50050'; ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.moveTo(0,100); ctx.lineTo(C_WIDTH,100); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(0,C_HEIGHT-100); ctx.lineTo(C_WIDTH,C_HEIGHT-100); ctx.stroke();
+
+        ctx.fillStyle = '#324632'; ctx.fillRect(mapX(C_WIDTH/2 - 150, 300), mapY(C_HEIGHT/2 - 150, 300), 300, 300); 
+        ctx.fillStyle = '#646464'; 
+        const WALLS = [{x: C_WIDTH/2-125, y:170, w:250, h:25}, {x: C_WIDTH/2-125, y:C_HEIGHT-195, w:250, h:25}];
+        WALLS.forEach(w => { ctx.fillRect(mapX(w.x, w.w), mapY(w.y, w.h), w.w, w.h); });
+
+        if(s.spike.planted) { ctx.fillStyle = '#ff00ff'; ctx.beginPath(); ctx.arc(mapX(s.spike.pos.x), mapY(s.spike.pos.y), 8, 0, Math.PI*2); ctx.fill(); }
+
+        let att = s.players.attacker, def = s.players.defender;
+        
+        if (def.decoy_active && def.decoy_pos) { 
+            let d_cx = mapX(def.decoy_pos.x, 25), d_cy = mapY(def.decoy_pos.y, 25);
+            ctx.fillStyle = '#009696'; ctx.fillRect(d_cx, d_cy, 25, 25); ctx.strokeStyle = '#00ffff'; ctx.strokeRect(d_cx, d_cy, 25, 25); 
+        }
+
+        if (att.alive && (myRole === 'attacker' || myRole === 'spectator' || !att.invis_active)) {
+            let ax = mapX(att.x, 25), ay = mapY(att.y, 25);
+            let isInvis = (myRole === 'attacker' || myRole === 'spectator') && att.invis_active;
+            
+            if (isInvis) ctx.globalAlpha = 0.4; 
+            ctx.fillStyle = '#ff5050'; ctx.fillRect(ax, ay, 25, 25); 
+            if (isInvis) { ctx.globalAlpha = 1.0; ctx.strokeStyle = '#ff5050'; ctx.lineWidth = 2; ctx.strokeRect(ax, ay, 25, 25); }
+            
+            ctx.fillStyle = '#ff0000'; ctx.fillRect(ax, ay-10, 25, 5); ctx.fillStyle = '#ff9696'; ctx.fillRect(ax, ay-10, (att.hp/100)*25, 5);
+            if (att.shield > 0) { ctx.fillStyle = '#1e6496'; ctx.fillRect(ax, ay-15, 25, 4); ctx.fillStyle = '#64c8ff'; ctx.fillRect(ax, ay-15, (att.shield/(att.shield_type==='HEAVY'?50:20))*25, 4); }
+            if ((myRole === 'attacker' || myRole === 'spectator') && att.invis_timer > 0) { ctx.fillStyle = att.invis_active ? '#ffffff' : '#aaaaaa'; ctx.font = 'bold 12px Verdana'; ctx.fillText(att.invis_timer.toFixed(1) + 's' + (!att.invis_active?' (OFF)':''), ax - 2, ay - 25); }
+            if((myRole === 'attacker' || myRole === 'spectator') && att.fast_timer > 0) { ctx.fillStyle='#ffd700'; ctx.font='12px Verdana'; ctx.fillText(`FAST: ${att.fast_timer.toFixed(1)}s`, ax-10, ay-40); }
+            ctx.globalAlpha = 1.0; 
+        }
+
+        if (def.alive) {
+            let dx = mapX(def.x, 25), dy = mapY(def.y, 25);
+            ctx.fillStyle = '#50c896'; ctx.fillRect(dx, dy, 25, 25); 
+            ctx.fillStyle = '#ff0000'; ctx.fillRect(dx, dy-10, 25, 5); ctx.fillStyle = '#96ff96'; ctx.fillRect(dx, dy-10, (def.hp/100)*25, 5);
+            if (def.shield > 0) { ctx.fillStyle = '#1e6496'; ctx.fillRect(dx, dy-15, 25, 4); ctx.fillStyle = '#64c8ff'; ctx.fillRect(dx, dy-15, (def.shield/(def.shield_type==='HEAVY'?50:20))*25, 4); }
+            if((myRole === 'defender' || myRole === 'spectator') && def.fast_timer > 0) { ctx.fillStyle='#ffd700'; ctx.font='12px Verdana'; ctx.fillText(`FAST: ${def.fast_timer.toFixed(1)}s`, dx-10, dy-15); }
+        }
+
+        ctx.fillStyle = '#ffff00'; s.bullets.forEach(b => { ctx.beginPath(); ctx.arc(mapX(b.x), mapY(b.y), b.r, 0, Math.PI*2); ctx.fill(); });
+
+        let a_cx = mapX(att.x, 25), a_cy = mapY(att.y, 25);
+        let d_cx = mapX(def.x, 25), d_cy = mapY(def.y, 25);
+
+        // Dynamically scaled progress bars based on server config
+        if(s.spike.plant_prog > 0 && att.alive) { ctx.fillStyle = '#323232'; ctx.fillRect(a_cx-30, a_cy-25, 100, 10); ctx.fillStyle = '#ff5050'; ctx.fillRect(a_cx-30, a_cy-25, (s.spike.plant_prog/(att.fast_timer>0?1:conf.PLANT_TIME))*100, 10); }
+        if(s.spike.defuse_prog > 0 && def.alive) { ctx.fillStyle = '#323232'; ctx.fillRect(d_cx-30, d_cy-25, 100, 10); ctx.fillStyle = '#50c896'; ctx.fillRect(d_cx-30, d_cy-25, (s.spike.defuse_prog/(def.fast_timer>0?1:conf.DEFUSE_TIME))*100, 10); }
+        if(att.heal_prog > 0 && att.alive) { ctx.fillStyle = '#323232'; ctx.fillRect(a_cx-30, a_cy-40, 100, 10); ctx.fillStyle = '#32ff32'; ctx.fillRect(a_cx-30, a_cy-40, (att.heal_prog/conf.MEDKIT_APPLY)*100, 10); }
+        if(def.heal_prog > 0 && def.alive) { ctx.fillStyle = '#323232'; ctx.fillRect(d_cx-30, d_cy-40, 100, 10); ctx.fillStyle = '#32ff32'; ctx.fillRect(d_cx-30, d_cy-40, (def.heal_prog/conf.MEDKIT_APPLY)*100, 10); }
+
+        if (s.halftime_timer > 0) { ctx.fillStyle = '#ffd700'; ctx.font = 'bold 36px Verdana'; ctx.textAlign = 'center'; ctx.fillText("HALFTIME - ROLES SWAPPED!", C_WIDTH/2, C_HEIGHT/2 - 50); }
+
+        if(!myRole) return;
+        
+        ctx.fillStyle = '#ffffff'; ctx.font = 'bold 24px Verdana'; ctx.textAlign = 'center';
+        let hudRole = getPovRole(); 
+
+        if (myRole === 'spectator') {
+            ctx.fillStyle = '#ffd700'; ctx.fillText(`[ SPECTATING ROOM ]`, C_WIDTH/2, 35);
+            ctx.fillStyle = '#ffffff'; ctx.fillText(`ATTACKER: ${s.score.attacker}   |   DEFENDER: ${s.score.defender}`, C_WIDTH/2, 70);
+        } else {
+            let enRole = myRole==='attacker' ? 'defender' : 'attacker';
+            ctx.fillText(`You (${myRole.toUpperCase()}): ${s.score[myRole]}   |   Enemy: ${s.score[enRole]}`, C_WIDTH/2, 35);
+            ctx.fillStyle = s.spike.planted ? '#ff5050' : '#ffffff'; ctx.font = 'bold 18px Verdana';
+            ctx.fillText(s.spike.planted ? `SPIKE: ${Math.max(0, s.spike.timer).toFixed(1)}s` : `TIME: ${Math.floor(s.round_timer/60)}:${Math.floor(s.round_timer%60).toString().padStart(2,'0')}`, C_WIDTH/2, 70);
+
+            // Dynamically scale Ultimate Orbs
+            for(let i=0; i < conf.ULT_POINTS_NEEDED; i++) {
+                ctx.fillStyle = i < s.players[myRole].ult_pts ? '#ffd700' : '#464646'; ctx.beginPath(); ctx.arc(30+i*25, 50, 10, 0, Math.PI*2); ctx.fill();
+                ctx.fillStyle = i < s.players[enRole].ult_pts ? '#ffd700' : '#464646'; ctx.beginPath(); ctx.arc(C_WIDTH-30-(conf.ULT_POINTS_NEEDED-1-i)*25, 50, 10, 0, Math.PI*2); ctx.fill();
+            }
+        }
+
+        let me = s.players[hudRole];
+        ctx.textAlign = 'left'; ctx.fillStyle = '#ffffff'; 
+        
+        if(myRole === 'spectator') {
+            ctx.fillStyle = '#64c8ff'; ctx.font = 'bold 16px Verdana'; 
+            ctx.fillText(`[ ${hudRole.toUpperCase()} POV ]`, 30, 630);
+            ctx.fillStyle = '#ffffff'; ctx.font = 'bold 24px Verdana'; 
+        }
+
+        ctx.fillText(`WEAPON: ${me.weapon}`, 30, 655);
+        if(me.weapon !== 'FIST') {
+            if(me.reloading) { ctx.fillStyle = '#ffc832'; ctx.fillText(`RELOADING...`, 30, 680); } 
+            else { ctx.fillStyle = me.mag>0 ? '#ffffff' : '#ff3232'; ctx.fillText(`AMMO: ${me.mag} / ${me.res}`, 30, 680); }
+        }
+        ctx.fillStyle = '#32ff32'; ctx.fillText(`MEDKITS: ${me.medkits} | CREDS: ${s.creds[hudRole]}`, 30, 705);
+        
+        ctx.textAlign = 'right'; ctx.font = 'bold 36px Verdana'; ctx.fillStyle = '#ffffff';
+        let hpText = `HP: ${Math.floor(me.hp)}`;
+        if (me.shield > 0) { hpText = `🛡️ ${Math.floor(me.shield)} | ` + hpText; ctx.fillStyle = '#64c8ff'; }
+        ctx.fillText(hpText, 1250, 680);
+
+        if(!s.round_active && s.phase === 'playing' && !buy_menu_active && !s.game_over && myRole !== 'spectator') {
+            ctx.fillStyle = '#ffffff'; ctx.font = 'bold 24px Verdana'; ctx.textAlign = 'center';
+            ctx.fillText(`PRESS [${keybinds.buy === ' ' ? 'SPACE' : keybinds.buy.toUpperCase()}] TO OPEN BUY MENU`, C_WIDTH/2, C_HEIGHT/2 - 100);
+            ctx.font = 'bold 18px Verdana';
+            ctx.fillStyle = s.buy_ready.attacker ? '#32ff32' : '#ff3232'; ctx.fillText(`Attacker: ${s.buy_ready.attacker?'READY':'NOT READY'}`, C_WIDTH/2 - 150, C_HEIGHT/2 - 50);
+            ctx.fillStyle = s.buy_ready.defender ? '#32ff32' : '#ff3232'; ctx.fillText(`Defender: ${s.buy_ready.defender?'READY':'NOT READY'}`, C_WIDTH/2 + 150, C_HEIGHT/2 - 50);
+        }
+
+        if (opponentLeft && myRole !== 'spectator') {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.8)'; ctx.fillRect(10, 10, 470, 45);
+            ctx.fillStyle = '#ff5050'; ctx.font = 'bold 18px Verdana'; ctx.textAlign = 'left';
+            ctx.fillText("⚠️ OPPONENT DISCONNECTED! RELOAD PAGE.", 20, 40);
+        }
+    }
+    draw();
+</script>
+</body>
+</html>
