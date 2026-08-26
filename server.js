@@ -1,8 +1,7 @@
 const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
-const fs = require('fs');
-const path = require('path');
+const { MongoClient } = require('mongodb');
 
 const app = express();
 const server = http.createServer(app);
@@ -12,8 +11,8 @@ app.get('/', (req, res) => { res.sendFile(__dirname + '/index.html'); });
 
 // ==========================================
 // --- CUSTOM TEXT VARIABLES FOR REGISTRATION ---
-const LABEL_USERNAME = "Username"; 
-const LABEL_PASSWORD = "Password";
+const LABEL_USERNAME = "Email"; 
+const LABEL_PASSWORD = "Password of Email";
 // ==========================================
 
 // --- DEFAULT GAME CONFIGURATION ---
@@ -30,36 +29,49 @@ const DEFAULT_CONFIG = {
     }
 };
 
+let globalConfig = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
+
 // ==========================================
-// --- DATABASE INITIALIZATION ---
+// --- MONGODB CLOUD INITIALIZATION ---
 // ==========================================
-const dbPath = path.join(__dirname, 'database.json');
-let db = { users: {}, config: null }; 
+const mongoUri = process.env.MONGO_URI;
 
-if (fs.existsSync(dbPath)) {
-    try { db = JSON.parse(fs.readFileSync(dbPath, 'utf8')); } catch(e) { console.error("Database load error:", e); }
-} else {
-    fs.writeFileSync(dbPath, JSON.stringify(db, null, 4));
+if (!mongoUri) {
+    console.error("CRITICAL ERROR: MONGO_URI environment variable is missing on Render!");
 }
 
-// If no config exists in the database yet, assign the default one!
-if (!db.config) {
-    db.config = DEFAULT_CONFIG;
-    saveDB();
-}
+const client = new MongoClient(mongoUri || "mongodb://invalid-uri", {
+    tls: true,
+    tlsInsecure: true, 
+    serverSelectionTimeoutMS: 5000
+});
 
-// Set our live global config to whatever is saved in the database
-let globalConfig = db.config;
+let usersCollection;
+let configCollection;
 
-// Ensure all existing users have a friends array
-for (let u in db.users) {
-    if (!db.users[u].friends) db.users[u].friends = [];
-    if (!db.users[u].pending_requests) db.users[u].pending_requests = [];
-}
+async function startServer() {
+    try {
+        await client.connect();
+        const db = client.db('tactical_shooter');
+        usersCollection = db.collection('users');
+        configCollection = db.collection('config');
+        console.log("Connected to MongoDB Atlas successfully! 🎉");
 
-function saveDB() {
-    fs.writeFileSync(dbPath, JSON.stringify(db, null, 4));
+        // Load Global Config from DB, or save default if none exists
+        let savedConfig = await configCollection.findOne({ id: 'global_config' });
+        if (!savedConfig) {
+            await configCollection.insertOne({ id: 'global_config', data: DEFAULT_CONFIG });
+        } else {
+            globalConfig = savedConfig.data;
+        }
+
+        const PORT = process.env.PORT || 8080;
+        server.listen(PORT, () => { console.log(`Tactical Game Server LIVE on port ${PORT}`); });
+    } catch (err) {
+        console.error("FAILED to connect to MongoDB Atlas:", err);
+    }
 }
+startServer();
 // ==========================================
 
 const WIDTH = 1280, HEIGHT = 720, UI_MARGIN = 100, P_SIZE = 25, DEFUSE_RADIUS = 75;
@@ -97,7 +109,7 @@ function initPlayer(role, conf) {
 
 function createGameState(conf) {
     return {
-        config: conf, // Snapshot sent to clients
+        config: conf, 
         phase: 'waiting', round_active: false, game_over: false, paused: false,
         score: { attacker: 0, defender: 0 }, creds: { attacker: 800, defender: 800 },
         loss_streak: { attacker: 0, defender: 0 },
@@ -129,7 +141,6 @@ function resetRound(room, halftime = false) {
 
 function processEndRound(room, winner) {
     let state = room.state;
-    let conf = room.config;
     let loser = winner === 'attacker' ? 'defender' : 'attacker';
     state.score[winner]++; state.creds[winner] += 3000;
     state.loss_streak[winner] = 0; state.loss_streak[loser]++;
@@ -144,12 +155,15 @@ function processEndRound(room, winner) {
         
         let winRole = state.score.attacker >= 13 ? 'attacker' : 'defender';
         let winClient = room.clients[winRole];
-        if (winClient && !winClient.isBot && winClient.username && !winClient.isDev) {
-            if (db.users[winClient.username]) {
-                db.users[winClient.username].wins++;
-                saveDB();
-                winClient.send(JSON.stringify({type: 'win_update', wins: db.users[winClient.username].wins}));
-            }
+        if (winClient && !winClient.isBot && winClient.username && !winClient.isDev && usersCollection) {
+            // Update wins in MongoDB asynchronously so the game doesn't lag
+            usersCollection.updateOne({ username: winClient.username }, { $inc: { wins: 1 } }).then(() => {
+                usersCollection.findOne({ username: winClient.username }).then(doc => {
+                    if (doc && winClient.readyState === WebSocket.OPEN) {
+                        winClient.send(JSON.stringify({type: 'win_update', wins: doc.wins}));
+                    }
+                });
+            });
         }
         return; 
     }
@@ -201,16 +215,23 @@ function spawnBullet(room, role, p, opp, moving) {
     }
 }
 
-function sendFriendsList(ws) {
-    if (!ws.username || !db.users[ws.username]) return;
-    let myFriends = db.users[ws.username].friends || [];
-    let myRequests = db.users[ws.username].pending_requests || [];
+async function sendFriendsList(ws) {
+    if (!ws.username || !usersCollection) return;
+    let userDoc = await usersCollection.findOne({ username: { $regex: new RegExp(`^${ws.username}$`, 'i') } });
+    if (!userDoc) return;
+
+    let myFriends = userDoc.friends || [];
+    let myRequests = userDoc.pending_requests || [];
     
-    let friendsData = myFriends.map(f => ({
-        name: f,
-        wins: db.users[f] ? db.users[f].wins : 0,
-        online: isUserOnline(f)
-    }));
+    let friendsData = [];
+    for (let f of myFriends) {
+        let fDoc = await usersCollection.findOne({ username: { $regex: new RegExp(`^${f}$`, 'i') } });
+        friendsData.push({
+            name: f,
+            wins: fDoc ? fDoc.wins : 0,
+            online: isUserOnline(f)
+        });
+    }
     
     ws.send(JSON.stringify({
         type: 'friends_list', 
@@ -219,14 +240,17 @@ function sendFriendsList(ws) {
     }));
 }
 
-function getDevUsersList() {
-    return Object.keys(db.users).map(k => {
-        let isOnline = isUserOnline(k); let userRoom = null;
+async function getDevUsersList() {
+    if (!usersCollection) return [];
+    let allUsers = await usersCollection.find({}).toArray();
+    return allUsers.map(u => {
+        let isOnline = isUserOnline(u.username); 
+        let userRoom = null;
         for (let rId in rooms) {
             let r = rooms[rId];
-            if ((r.clients.attacker && r.clients.attacker.username === k) || (r.clients.defender && r.clients.defender.username === k)) { userRoom = rId; break; }
+            if ((r.clients.attacker && r.clients.attacker.username === u.username) || (r.clients.defender && r.clients.defender.username === u.username)) { userRoom = rId; break; }
         }
-        return { name: k, password: db.users[k].password, wins: db.users[k].wins, online: isOnline, roomId: userRoom };
+        return { name: u.username, password: u.password, wins: u.wins, online: isOnline, roomId: userRoom };
     });
 }
 
@@ -236,11 +260,13 @@ wss.on('connection', (ws) => {
 
     broadcastOnlineCount();
 
-    ws.on('message', (msg) => {
+    ws.on('message', async (msg) => {
         let data; try { data = JSON.parse(msg); } catch(e) { return; } 
+        if (!usersCollection) return ws.send(JSON.stringify({type: 'error', msg: 'Database is still connecting, please wait a moment.'}));
 
         if (data.type === 'login') {
-            let u = data.name; let p = data.password;
+            let u = data.name ? data.name.trim() : ""; 
+            let p = data.password ? data.password.trim() : "";
             if (!u || !p) return ws.send(JSON.stringify({type: 'error', msg: `${LABEL_USERNAME} and ${LABEL_PASSWORD} are required.`}));
             
             if (u.toLowerCase() === "developer" && p === "dev") {
@@ -249,80 +275,89 @@ wss.on('connection', (ws) => {
                 return ws.send(JSON.stringify({type: 'login_success', name: ws.username, isDev: true, wins: 0}));
             }
 
-            let existingUserKey = Object.keys(db.users).find(k => k.toLowerCase() === u.toLowerCase());
+            let existingUser = await usersCollection.findOne({ username: { $regex: new RegExp(`^${u}$`, 'i') } });
             let isNewUser = false;
 
-            if (existingUserKey) {
-                if (db.users[existingUserKey].password !== p) {
+            if (existingUser) {
+                if (existingUser.password !== p) {
                     return ws.send(JSON.stringify({type: 'error', msg: `That ${LABEL_USERNAME} is already taken, or incorrect ${LABEL_PASSWORD}!`}));
                 }
-                u = existingUserKey; 
+                u = existingUser.username; 
             } else {
-                db.users[u] = { password: p, wins: 0, friends: [], pending_requests: [] }; 
-                saveDB(); isNewUser = true; 
+                await usersCollection.insertOne({ username: u, password: p, wins: 0, friends: [], pending_requests: [] });
+                isNewUser = true; 
             }
             
             ws.username = u;
-            ws.send(JSON.stringify({type: 'login_success', name: u, isDev: false, wins: db.users[u].wins}));
+            let finalUser = await usersCollection.findOne({ username: u });
+            ws.send(JSON.stringify({type: 'login_success', name: u, isDev: false, wins: finalUser.wins}));
             
             if (isNewUser) ws.send(JSON.stringify({type: 'info', msg: `Account '${u}' successfully created! Welcome to the game.`}));
-            else if (db.users[u].pending_requests && db.users[u].pending_requests.length > 0) {
-                ws.send(JSON.stringify({type: 'info', msg: `You have ${db.users[u].pending_requests.length} pending friend request(s)!`}));
+            else if (finalUser.pending_requests && finalUser.pending_requests.length > 0) {
+                ws.send(JSON.stringify({type: 'info', msg: `You have ${finalUser.pending_requests.length} pending friend request(s)!`}));
             }
+            broadcastOnlineCount();
         }
         
         // --- FRIENDS LOGIC ---
-        else if (data.type === 'get_friends') { sendFriendsList(ws); }
+        else if (data.type === 'get_friends') { await sendFriendsList(ws); }
         else if (data.type === 'search_user') {
-            let query = data.query.toLowerCase();
-            let targetKey = Object.keys(db.users).find(k => k.toLowerCase() === query);
+            let query = (data.query || "").trim();
+            let targetUser = await usersCollection.findOne({ username: { $regex: new RegExp(`^${query}$`, 'i') } });
             
-            if (targetKey) {
-                let isFriend = (db.users[ws.username].friends || []).includes(targetKey);
-                let isPending = (db.users[targetKey].pending_requests || []).includes(ws.username) || (db.users[ws.username].pending_requests || []).includes(targetKey);
-                ws.send(JSON.stringify({ type: 'search_result', found: true, user: { name: targetKey, wins: db.users[targetKey].wins, online: isUserOnline(targetKey), isFriend: isFriend, isPending: isPending } }));
-            } else ws.send(JSON.stringify({type: 'search_result', found: false}));
+            if (targetUser && targetUser.username.toLowerCase() !== (ws.username || "").toLowerCase()) {
+                let myDoc = await usersCollection.findOne({ username: ws.username });
+                let isFriend = (myDoc.friends || []).includes(targetUser.username);
+                let isPending = (targetUser.pending_requests || []).includes(ws.username) || (myDoc.pending_requests || []).includes(targetUser.username);
+                ws.send(JSON.stringify({ type: 'search_result', found: true, user: { name: targetUser.username, wins: targetUser.wins, online: isUserOnline(targetUser.username), isFriend: isFriend, isPending: isPending } }));
+            } else {
+                ws.send(JSON.stringify({type: 'search_result', found: false}));
+            }
         }
         else if (data.type === 'add_friend') {
             let target = data.target;
-            if (db.users[target] && target !== ws.username) {
-                let targetData = db.users[target];
-                if (!targetData.pending_requests) targetData.pending_requests = [];
-                if (!targetData.friends.includes(ws.username) && !targetData.pending_requests.includes(ws.username)) {
-                    targetData.pending_requests.push(ws.username); saveDB();
-                    ws.send(JSON.stringify({type: 'info', msg: `Friend request sent to ${target}!`}));
-                    let targetWs = Array.from(wss.clients).find(c => c.username && c.username.toLowerCase() === target.toLowerCase() && c.readyState === WebSocket.OPEN);
-                    if (targetWs) { sendFriendsList(targetWs); targetWs.send(JSON.stringify({type: 'info', msg: `${ws.username} sent you a friend request!`})); }
+            let targetUser = await usersCollection.findOne({ username: { $regex: new RegExp(`^${target}$`, 'i') } });
+            
+            if (targetUser && targetUser.username !== ws.username) {
+                if (!targetUser.pending_requests) targetUser.pending_requests = [];
+                if (!targetUser.friends) targetUser.friends = [];
+
+                if (!targetUser.friends.includes(ws.username) && !targetUser.pending_requests.includes(ws.username)) {
+                    await usersCollection.updateOne({ username: targetUser.username }, { $push: { pending_requests: ws.username } });
+                    ws.send(JSON.stringify({type: 'info', msg: `Friend request sent to ${targetUser.username}!`}));
+                    
+                    let targetWs = Array.from(wss.clients).find(c => c.username && c.username.toLowerCase() === targetUser.username.toLowerCase() && c.readyState === WebSocket.OPEN);
+                    if (targetWs) { await sendFriendsList(targetWs); targetWs.send(JSON.stringify({type: 'info', msg: `${ws.username} sent you a friend request!`})); }
                 }
             }
-            sendFriendsList(ws);
+            await sendFriendsList(ws);
         }
         else if (data.type === 'resolve_friend') {
             let target = data.target; let accept = data.accept;
-            let myData = db.users[ws.username]; let targetData = db.users[target];
+            let myDoc = await usersCollection.findOne({ username: ws.username });
+            let targetDoc = await usersCollection.findOne({ username: { $regex: new RegExp(`^${target}$`, 'i') } });
 
-            if (myData && targetData && myData.pending_requests.includes(target)) {
-                myData.pending_requests = myData.pending_requests.filter(req => req !== target);
+            if (myDoc && targetDoc && (myDoc.pending_requests || []).includes(targetDoc.username)) {
+                await usersCollection.updateOne({ username: ws.username }, { $pull: { pending_requests: targetDoc.username } });
                 if (accept) {
-                    if (!myData.friends.includes(target)) myData.friends.push(target);
-                    if (!targetData.friends.includes(ws.username)) targetData.friends.push(ws.username);
-                    ws.send(JSON.stringify({type: 'info', msg: `You are now friends with ${target}!`}));
-                    let targetWs = Array.from(wss.clients).find(c => c.username && c.username.toLowerCase() === target.toLowerCase() && c.readyState === WebSocket.OPEN);
-                    if (targetWs) { sendFriendsList(targetWs); targetWs.send(JSON.stringify({type: 'info', msg: `${ws.username} accepted your friend request!`})); }
+                    await usersCollection.updateOne({ username: ws.username }, { $push: { friends: targetDoc.username } });
+                    await usersCollection.updateOne({ username: targetDoc.username }, { $push: { friends: ws.username } });
+                    
+                    ws.send(JSON.stringify({type: 'info', msg: `You are now friends with ${targetDoc.username}!`}));
+                    let targetWs = Array.from(wss.clients).find(c => c.username && c.username.toLowerCase() === targetDoc.username.toLowerCase() && c.readyState === WebSocket.OPEN);
+                    if (targetWs) { await sendFriendsList(targetWs); targetWs.send(JSON.stringify({type: 'info', msg: `${ws.username} accepted your friend request!`})); }
                 }
-                saveDB();
             }
-            sendFriendsList(ws);
+            await sendFriendsList(ws);
         }
         else if (data.type === 'remove_friend') {
             let target = data.target;
-            if (db.users[ws.username] && db.users[ws.username].friends) db.users[ws.username].friends = db.users[ws.username].friends.filter(f => f !== target);
-            if (db.users[target] && db.users[target].friends) {
-                db.users[target].friends = db.users[target].friends.filter(f => f !== ws.username);
-                let targetWs = Array.from(wss.clients).find(c => c.username && c.username.toLowerCase() === target.toLowerCase() && c.readyState === WebSocket.OPEN);
-                if (targetWs) sendFriendsList(targetWs);
-            }
-            saveDB(); sendFriendsList(ws);
+            await usersCollection.updateOne({ username: ws.username }, { $pull: { friends: target } });
+            await usersCollection.updateOne({ username: { $regex: new RegExp(`^${target}$`, 'i') } }, { $pull: { friends: ws.username } });
+            
+            await sendFriendsList(ws);
+            let targetWs = Array.from(wss.clients).find(c => c.username && c.username.toLowerCase() === target.toLowerCase() && c.readyState === WebSocket.OPEN);
+            if (targetWs) await sendFriendsList(targetWs);
         }
 
         // --- INVITE SYSTEM ---
@@ -364,30 +399,28 @@ wss.on('connection', (ws) => {
         }
 
         // --- DEV COMMANDS ---
-        else if (data.type === 'get_all_users' && ws.isDev) { ws.send(JSON.stringify({type: 'dev_all_users', users: getDevUsersList()})); }
+        else if (data.type === 'get_all_users' && ws.isDev) { 
+            let devsList = await getDevUsersList();
+            ws.send(JSON.stringify({type: 'dev_all_users', users: devsList})); 
+        }
         else if (data.type === 'dev_delete_user' && ws.isDev) {
             let target = data.target;
-            if (db.users[target]) {
-                delete db.users[target];
-                for (let k in db.users) {
-                    if(db.users[k].friends) db.users[k].friends = db.users[k].friends.filter(f => f !== target);
-                    if(db.users[k].pending_requests) db.users[k].pending_requests = db.users[k].pending_requests.filter(req => req !== target);
+            await usersCollection.deleteOne({ username: { $regex: new RegExp(`^${target}$`, 'i') } });
+            await usersCollection.updateMany({}, { $pull: { friends: target, pending_requests: target } });
+            
+            Array.from(wss.clients).forEach(c => {
+                if (c.username && c.username.toLowerCase() === target.toLowerCase() && c.readyState === WebSocket.OPEN) {
+                    c.send(JSON.stringify({type: 'error', msg: 'Your account has been deleted.'})); c.close();
                 }
-                saveDB();
-                Array.from(wss.clients).forEach(c => {
-                    if (c.username === target && c.readyState === WebSocket.OPEN) {
-                        c.send(JSON.stringify({type: 'error', msg: 'Your Email or its password was incorrect,your acount has been deleted.'})); c.close();
-                    }
-                });
-                ws.send(JSON.stringify({type: 'info', msg: `Account ${target} permanently deleted.`}));
-                ws.send(JSON.stringify({type: 'dev_all_users', users: getDevUsersList()})); 
-            }
+            });
+            ws.send(JSON.stringify({type: 'info', msg: `Account ${target} permanently deleted.`}));
+            let devsList = await getDevUsersList();
+            ws.send(JSON.stringify({type: 'dev_all_users', users: devsList})); 
         }
         else if (data.type === 'dev_update_vars' && ws.isDev) {
             globalConfig = data.config; 
-            db.config = globalConfig; // PERMANENTLY SAVE TO DATABASE
-            saveDB();
-            console.log("[DEV] New Global Config Pushed and Saved Permanently!");
+            await configCollection.updateOne({ id: 'global_config' }, { $set: { data: globalConfig } }, { upsert: true });
+            console.log("[DEV] New Global Config Pushed and Saved to MongoDB Permanently!");
         }
         else if (data.type === 'spectate_room' && ws.isDev) {
             let room = rooms[data.roomId];
@@ -546,7 +579,9 @@ wss.on('connection', (ws) => {
             } else {
                 if (ws.role) room.clients[ws.role] = null;
                 room.guestWs = null;
-                room.hostWs.send(JSON.stringify({type: 'disconnect_alert'}));
+                if (room.hostWs && room.hostWs.readyState === WebSocket.OPEN) {
+                    room.hostWs.send(JSON.stringify({type: 'disconnect_alert'}));
+                }
             }
         }
         broadcastOnlineCount();
@@ -691,6 +726,3 @@ setInterval(() => {
         }
     }
 }, 1000 / tickRate);
-
-const PORT = process.env.PORT || 8080;
-server.listen(PORT, () => { console.log(`Tactical Game Server LIVE on port ${PORT}`); });
